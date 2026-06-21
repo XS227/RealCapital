@@ -4,10 +4,11 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 
 const NAV = [
-  { href: "/admin",           label: "Overview",   icon: "◈" },
-  { href: "/admin/trades",    label: "Trades",     icon: "↕" },
-  { href: "/admin/decisions", label: "Decisions",  icon: "🧠" },
-  { href: "/admin/risk",      label: "Risk",       icon: "🛡" },
+  { href: "/admin",            label: "Overview",   icon: "◈" },
+  { href: "/admin/analytics",  label: "Analytics",  icon: "📈" },
+  { href: "/admin/trades",     label: "Trades",     icon: "↕" },
+  { href: "/admin/decisions",  label: "Decisions",  icon: "🧠" },
+  { href: "/admin/risk",       label: "Risk",       icon: "🛡" },
 ];
 
 export default function AdminShell({ children }: { children: React.ReactNode }) {
