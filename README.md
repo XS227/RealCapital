@@ -122,32 +122,31 @@ returning `FullDashboard`. The `checkDataSource()` export feeds the health endpo
 
 ---
 
-## Nginx reverse proxy (domain-ready)
+## Nginx reverse proxy
 
-> **Note:** Do NOT point `realcapital.no` DNS to this server yet.
-> Test locally first. Add SSL via certbot before going public.
+**Status: live.** DNS, SSL, and nginx are fully configured and running.
 
-When ready, create `/etc/nginx/sites-available/realcapital.no`:
+This server uses a stream-level SNI router on port 443 (see `/etc/nginx/nginx.conf`).
+All vhosts must listen on an internal loopback port — **not** directly on `443 ssl`.
+`realcapital.no` is routed to `127.0.0.1:4431`.
+
+`/etc/nginx/sites-available/realcapital.no`:
 
 ```nginx
+# TLS terminated here via stream SNI router (port 4431)
 server {
-    listen 80;
-    server_name realcapital.no www.realcapital.no;
-
-    # Redirect HTTP → HTTPS once SSL is configured
-    return 301 https://$host$request_uri;
-}
-
-server {
-    listen 443 ssl http2;
+    listen 127.0.0.1:4431 ssl;
     server_name realcapital.no www.realcapital.no;
 
     ssl_certificate     /etc/letsencrypt/live/realcapital.no/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/realcapital.no/privkey.pem;
-    ssl_protocols       TLSv1.2 TLSv1.3;
-    ssl_ciphers         HIGH:!aNULL:!MD5;
+    include             /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam         /etc/letsencrypt/ssl-dhparams.pem;
 
-    # Proxy to Next.js
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/html;
+    }
+
     location / {
         proxy_pass         http://127.0.0.1:4012;
         proxy_http_version 1.1;
@@ -161,19 +160,34 @@ server {
         proxy_read_timeout 60s;
     }
 }
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name realcapital.no www.realcapital.no;
+
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/html;
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
 ```
 
-Enable and test:
-```bash
-sudo ln -s /etc/nginx/sites-available/realcapital.no /etc/nginx/sites-enabled/
-sudo nginx -t
-sudo systemctl reload nginx
-
-# Get SSL certificate (after DNS is pointed to this server)
-sudo certbot --nginx -d realcapital.no -d www.realcapital.no
+Stream SNI map entry in `/etc/nginx/nginx.conf`:
+```nginx
+realcapital.no      127.0.0.1:4431;
+www.realcapital.no  127.0.0.1:4431;
 ```
 
-Set `NEXT_PUBLIC_APP_URL=https://realcapital.no` in `.env.local` before deploying.
+> **Important:** Do NOT use `listen 443 ssl` in this vhost — port 443 is owned
+> by the stream block. Adding it will conflict with the SNI router and break all
+> HTTPS on the server.
+
+SSL certificate is managed by certbot and auto-renews. Expires 2026-09-19.
+To renew manually: `sudo certbot renew`
 
 ---
 
