@@ -7,8 +7,9 @@ import {
   ResponsiveContainer,
   LineChart, Line,
   BarChart, Bar,
+  PieChart, Pie,
   XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine,
-  Cell,
+  Cell, Legend,
 } from "recharts";
 
 const GREEN = "#22c55e";
@@ -173,6 +174,59 @@ export default function AnalyticsPage() {
                 dot={{ r: 3, fill: GOLD, strokeWidth: 0 }} activeDot={{ r: 5 }} />
             </LineChart>
           </ResponsiveContainer>
+        )}
+      </div>
+
+      {/* Win / Loss Donut */}
+      <div className="card" style={{ marginBottom: 20 }}>
+        <div className="card-title" style={{ marginBottom: 4 }}>Win / Loss</div>
+        <div className="card-sub" style={{ marginBottom: 20 }}>Share of winning vs losing closed trades</div>
+        {trades.length === 0 ? (
+          <div className="empty-state">No closed trades yet</div>
+        ) : (
+          <div style={{ display: "flex", alignItems: "center", gap: 40 }}>
+            <ResponsiveContainer width={220} height={220}>
+              <PieChart>
+                <Pie
+                  data={[
+                    { name: "Wins",   value: wins.length },
+                    { name: "Losses", value: losses.length },
+                  ]}
+                  cx="50%"
+                  cy="50%"
+                  innerRadius={60}
+                  outerRadius={95}
+                  paddingAngle={3}
+                  dataKey="value"
+                  startAngle={90}
+                  endAngle={-270}
+                >
+                  <Cell fill={GREEN} />
+                  <Cell fill={RED} />
+                </Pie>
+                <Tooltip
+                  {...TIP_STYLE}
+                  formatter={(v: unknown) => [`${v} trades`]}
+                />
+              </PieChart>
+            </ResponsiveContainer>
+            <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+              {[
+                { label: "Wins",       value: wins.length,    pct: trades.length ? (wins.length / trades.length * 100).toFixed(1) : "0",    color: GREEN },
+                { label: "Losses",     value: losses.length,  pct: trades.length ? (losses.length / trades.length * 100).toFixed(1) : "0",  color: RED   },
+              ].map((row) => (
+                <div key={row.label} style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                  <div style={{ width: 10, height: 10, borderRadius: "50%", background: row.color, flexShrink: 0 }} />
+                  <div>
+                    <div style={{ fontSize: ".78rem", color: "var(--text-3)", textTransform: "uppercase", letterSpacing: ".06em" }}>{row.label}</div>
+                    <div style={{ fontSize: "1.25rem", fontWeight: 700, fontFamily: "var(--font-mono)", color: row.color }}>
+                      {row.value} <span style={{ fontSize: ".85rem", fontWeight: 400, color: "var(--text-2)" }}>({row.pct}%)</span>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
         )}
       </div>
 
