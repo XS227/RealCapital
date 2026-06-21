@@ -1,12 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getIronSession } from "iron-session";
-import { createHash } from "crypto";
+import { createHash, timingSafeEqual } from "crypto";
 import { sessionOptions } from "@/lib/session";
+import { config } from "@/lib/config";
 import type { SessionData } from "@/lib/session";
 
+// 5 attempts per IP per minute
 const RATE_MAP = new Map<string, { count: number; reset: number }>();
-const RATE_LIMIT = 5;
-const RATE_WINDOW = 60_000; // 1 minute
+const RATE_LIMIT  = 5;
+const RATE_WINDOW = 60_000;
 
 function rateLimited(ip: string): boolean {
   const now = Date.now();
@@ -20,8 +22,20 @@ function rateLimited(ip: string): boolean {
   return entry.count > RATE_LIMIT;
 }
 
-function sha256(s: string): string {
-  return createHash("sha256").update(s).digest("hex");
+function sha256hex(s: string): string {
+  return createHash("sha256").update(s, "utf8").digest("hex");
+}
+
+function constantTimeMatch(a: string, b: string): boolean {
+  // Pad to same length so timingSafeEqual doesn't throw on mismatched buffers.
+  // We also independently check the hash so length padding doesn't open a bypass.
+  const bufA = Buffer.from(a.padEnd(128, "\0"));
+  const bufB = Buffer.from(b.padEnd(128, "\0"));
+  return timingSafeEqual(bufA, bufB) && a.length === b.length;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
 }
 
 export async function POST(req: NextRequest) {
@@ -31,13 +45,16 @@ export async function POST(req: NextRequest) {
     "local";
 
   if (rateLimited(ip)) {
-    return NextResponse.json({ error: "Too many attempts. Try again in 1 minute." }, { status: 429 });
+    return NextResponse.json(
+      { error: "Too many attempts. Try again in 1 minute." },
+      { status: 429 }
+    );
   }
 
   let password: string;
   try {
     const body = await req.json();
-    password = String(body.password || "");
+    password = String(body?.password ?? "");
   } catch {
     return NextResponse.json({ error: "Invalid request" }, { status: 400 });
   }
@@ -46,18 +63,19 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Password required" }, { status: 400 });
   }
 
-  const storedHash = process.env.ADMIN_PASSWORD_HASH || "";
-  const inputHash = sha256(password);
+  const storedHash = config.adminPasswordHash;
 
-  // Constant-time comparison to prevent timing attacks
-  const match =
-    storedHash.length > 0 &&
-    storedHash.length === inputHash.length &&
-    sha256(storedHash + inputHash) === sha256(storedHash + inputHash) && // dummy — real check below
-    timingSafeEqual(inputHash, storedHash);
+  if (!storedHash) {
+    // Admin login not configured — refuse all attempts silently
+    await delay(500);
+    return NextResponse.json({ error: "Invalid credentials" }, { status: 401 });
+  }
+
+  const inputHash = sha256hex(password);
+  const match = constantTimeMatch(inputHash, storedHash);
 
   if (!match) {
-    await delay(500); // slow down brute force
+    await delay(500);
     return NextResponse.json({ error: "Invalid credentials" }, { status: 401 });
   }
 
@@ -66,17 +84,4 @@ export async function POST(req: NextRequest) {
   session.isAdmin = true;
   await session.save();
   return res;
-}
-
-function timingSafeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) {
-    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  }
-  return diff === 0;
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
 }

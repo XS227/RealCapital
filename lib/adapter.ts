@@ -4,15 +4,15 @@
  * Reads from memory.json only — never writes, never modifies trading logic.
  * All types mirror the agent's stored schema exactly.
  *
- * Connect real data: set MEMORY_JSON_PATH env var to the agent's memory.json.
- * If the file is missing or LIVE_DATA=0, returns mock data.
+ * Connect real data: set MEMORY_JSON_PATH in .env.local.
+ * If the file is missing or LIVE_DATA=0, falls back to mock data.
  */
 
 import { promises as fs } from "fs";
+import { config } from "./config";
 
-const MEMORY_PATH =
-  process.env.MEMORY_JSON_PATH || "/home/ubuntu/ton-momentum-hunter/memory.json";
-const LIVE = process.env.LIVE_DATA !== "0";
+const MEMORY_PATH = config.memoryJsonPath;
+const LIVE        = config.liveData;
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -171,10 +171,11 @@ function mapPortfolio(pf: any, trades: any[]): Portfolio {
 }
 
 function mapOpenPositions(raw: any[], nowMs: number): OpenPosition[] {
-  return (raw || []).map((p: any): OpenPosition => {
-    const cost = num(p.cost_ton);
+  if (!Array.isArray(raw)) return [];
+  return raw.map((p: any): OpenPosition => {
+    const cost  = num(p.cost_ton);
     const value = num(p.current_value_ton, cost);
-    const entry = num(p.entry_price_ton);
+    const entry   = num(p.entry_price_ton);
     const current = num(p.current_price_ton, entry);
     const dec = p.entry_decision || {};
     return {
@@ -197,7 +198,8 @@ function mapOpenPositions(raw: any[], nowMs: number): OpenPosition[] {
 }
 
 function mapClosedTrades(raw: any[]): ClosedTrade[] {
-  return (raw || [])
+  if (!Array.isArray(raw)) return [];
+  return raw
     .slice()
     .reverse()
     .map((t: any): ClosedTrade => {
@@ -226,12 +228,13 @@ function mapClosedTrades(raw: any[]): ClosedTrade[] {
 }
 
 function mapDecisions(raw: any[]): AiDecision[] {
-  return (raw || [])
+  if (!Array.isArray(raw)) return [];
+  return raw
     .slice(-500)
     .reverse()
     .map((d: any): AiDecision => {
       const dec = d.decision || {};
-      const ctx = d.context || {};
+      const ctx = d.context  || {};
       return {
         ts: num(d.ts),
         symbol: String(d.symbol || "?"),
@@ -249,7 +252,8 @@ function mapDecisions(raw: any[]): AiDecision[] {
 }
 
 function mapMissed(raw: any[]): MissedCandidate[] {
-  return (raw || [])
+  if (!Array.isArray(raw)) return [];
+  return raw
     .slice(-200)
     .reverse()
     .map((m: any): MissedCandidate => ({
@@ -264,7 +268,8 @@ function mapMissed(raw: any[]): MissedCandidate[] {
 }
 
 function mapBlockedExits(raw: any[]): ProtectionEvent[] {
-  return (raw || [])
+  if (!Array.isArray(raw)) return [];
+  return raw
     .slice()
     .reverse()
     .map((b: any): ProtectionEvent => ({
@@ -293,12 +298,11 @@ function mapProtection(prot: any): ProtectionStatus {
 }
 
 function mapAgentStatus(s: any, nowMs: number): AgentStatus {
-  const trades = Array.isArray(s.closed_trades) ? s.closed_trades : [];
-  const decisions = Array.isArray(s.ai_decisions) ? s.ai_decisions : [];
-  const lastActivityEpoch =
-    decisions.length ? num(decisions[decisions.length - 1].ts) : null;
-  const lastActivityAt = lastActivityEpoch
-    ? lastActivityEpoch * 1000
+  const trades    = Array.isArray(s.closed_trades) ? s.closed_trades : [];
+  const decisions = Array.isArray(s.ai_decisions)  ? s.ai_decisions  : [];
+  const lastDecEpoch = decisions.length ? num(decisions[decisions.length - 1].ts) : null;
+  const lastActivityAt = lastDecEpoch
+    ? lastDecEpoch * 1000
     : trades.length
     ? num(trades[trades.length - 1].closed_at) * 1000
     : null;
@@ -321,24 +325,34 @@ export async function readFullDashboard(): Promise<FullDashboard> {
   if (LIVE) {
     try {
       const raw = await fs.readFile(MEMORY_PATH, "utf-8");
-      const s = JSON.parse(raw);
+      const s   = JSON.parse(raw);
       const trades = Array.isArray(s.closed_trades) ? s.closed_trades : [];
       return {
-        portfolio: mapPortfolio(s.portfolio || {}, trades),
-        agentStatus: mapAgentStatus(s, nowMs),
-        openPositions: mapOpenPositions(s.open_positions, nowMs),
-        closedTrades: mapClosedTrades(trades),
-        recentDecisions: mapDecisions(s.ai_decisions),
+        portfolio:        mapPortfolio(s.portfolio || {}, trades),
+        agentStatus:      mapAgentStatus(s, nowMs),
+        openPositions:    mapOpenPositions(s.open_positions, nowMs),
+        closedTrades:     mapClosedTrades(trades),
+        recentDecisions:  mapDecisions(s.ai_decisions),
         missedCandidates: mapMissed(s.missed_candidates),
-        blockedExits: mapBlockedExits(s.blocked_exits),
-        isMock: false,
+        blockedExits:     mapBlockedExits(s.blocked_exits),
+        isMock:    false,
         updatedAt: nowMs,
       };
     } catch {
-      // fall through to mock
+      // file missing / parse error → fall through to mock
     }
   }
   return makeMockDashboard(nowMs);
+}
+
+/** Check whether the data source is reachable (for health endpoint). */
+export async function checkDataSource(): Promise<boolean> {
+  try {
+    await fs.access(MEMORY_PATH);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // ── Mock data ──────────────────────────────────────────────────────────────────

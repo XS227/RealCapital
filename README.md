@@ -2,7 +2,7 @@
 
 Premium AI trading intelligence dashboard for the TON Momentum Hunter agent.
 
-**Status:** Paper trading simulation · Experimental system
+**Status:** Paper trading simulation · Experimental system · v0.1.1
 
 ---
 
@@ -10,12 +10,10 @@ Premium AI trading intelligence dashboard for the TON Momentum Hunter agent.
 
 ```bash
 cp .env.example .env.local
-# Edit .env.local with your values (see Environment Variables below)
+# Fill in ADMIN_PASSWORD_HASH and SESSION_SECRET (see below)
 npm install
 npm run build
 npm start          # production on port 4012
-# or
-npm run dev        # dev server on port 4012
 ```
 
 Using PM2:
@@ -24,26 +22,39 @@ pm2 start ecosystem.config.js
 pm2 save
 ```
 
+Development:
+```bash
+npm run dev        # hot-reload on port 4012
+npm run typecheck  # run TypeScript check without building
+npm run lint       # ESLint
+```
+
 ---
 
 ## Environment Variables
 
 | Variable | Required | Description |
 |---|---|---|
-| `MEMORY_JSON_PATH` | Yes | Absolute path to agent's `memory.json` |
-| `LIVE_DATA` | No | Set to `0` to force mock data (default: `1`) |
-| `ADMIN_PASSWORD_HASH` | Yes | SHA-256 hash of admin password |
-| `SESSION_SECRET` | Yes | 32+ char random string for session encryption |
-| `NEXT_PUBLIC_APP_URL` | No | Public hostname (for meta tags) |
+| `MEMORY_JSON_PATH` | Yes | Absolute path to agent's `memory.json` (read-only) |
+| `LIVE_DATA` | No | Set `0` to force mock data (default: `1`) |
+| `ADMIN_PASSWORD_HASH` | Yes | SHA-256 hex hash of admin password |
+| `SESSION_SECRET` | Yes | 64-char random hex for session encryption |
+| `NEXT_PUBLIC_APP_URL` | No | Public hostname, no trailing slash |
 
-**Generating credentials:**
+**Generate credentials:**
+
 ```bash
-# Password hash (SHA-256)
-node -e "const c=require('crypto'); console.log(c.createHash('sha256').update('yourpassword').digest('hex'))"
+# 1. Admin password hash (SHA-256 of your chosen password)
+node -e "const c=require('crypto'); console.log(c.createHash('sha256').update('YOUR_STRONG_PASSWORD').digest('hex'))"
 
-# Session secret
+# 2. Session secret (random 32 bytes as hex)
 node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 ```
+
+**Production startup validation:**
+The app refuses to start in `NODE_ENV=production` if `ADMIN_PASSWORD_HASH` or
+`SESSION_SECRET` are missing or placeholder values. In development, insecure
+fallbacks are used with a console warning.
 
 ---
 
@@ -54,92 +65,147 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 | `/` | Public | Investor-facing frontpage |
 | `/dashboard` | Public | Live portfolio summary (read-only) |
 | `/admin/login` | Public | Admin authentication |
-| `/admin` | Admin | Full dashboard (all KPIs + positions + recent trades) |
-| `/admin/trades` | Admin | Complete trade history with filtering |
-| `/admin/decisions` | Admin | AI decision log + missed opportunities |
-| `/admin/risk` | Admin | Protection events, blocked exits, risk parameters |
-| `/api/status` | Public | Read-only portfolio summary (rate-limited) |
-| `/api/admin/portfolio` | Admin | Full data payload |
-| `/api/auth/login` | Public | POST — rate-limited to 5/min per IP |
-| `/api/auth/logout` | Admin | POST — destroys session |
+| `/admin` | Admin | Full KPI overview + open positions + recent trades |
+| `/admin/trades` | Admin | Complete trade history with win/loss filter |
+| `/admin/decisions` | Admin | AI decision audit log + missed opportunities |
+| `/admin/risk` | Admin | Capital protection events, blocked exits, risk parameters |
+| `/api/status` | Public | Read-only portfolio summary (rate-limited 30 req/10s) |
+| `/api/health` | Public | App health: version, uptime, dataSourceConnected |
+| `/api/admin/portfolio` | Admin | Full data payload (requires session) |
+| `/api/auth/login` | Public | POST — rate-limited to 5 req/min per IP |
+| `/api/auth/logout` | Admin | POST — destroys session cookie |
+
+---
+
+## Security
+
+- All `/admin/*` routes protected by middleware — unauthenticated requests
+  redirect to `/admin/login`
+- Session cookie: `httpOnly`, `sameSite=lax`, `secure=true` in production, 8h TTL
+- Login: 5 req/min rate limit per IP, 500ms artificial delay on failure,
+  constant-time comparison using `crypto.timingSafeEqual`
+- Security headers on all routes: `X-Frame-Options: DENY`,
+  `X-Content-Type-Options: nosniff`, `Referrer-Policy`, `Permissions-Policy`,
+  `Strict-Transport-Security`
+- Admin password stored as SHA-256 hash in env — never in code or git
 
 ---
 
 ## Data source schema
 
-The data adapter (`lib/adapter.ts`) reads `memory.json` from the TON Momentum Hunter agent. All reads are read-only — no writes ever occur.
-
-**Key fields consumed from `memory.json`:**
+The data adapter (`lib/adapter.ts`) reads `memory.json` from the agent.
+**Read-only — never writes to memory.json or modifies trading logic.**
 
 ```
 memory.json
-├── portfolio
-│   ├── starting_capital_ton       — starting balance
-│   ├── cash_ton                   — current cash
-│   ├── total_value_ton            — total portfolio value
-│   ├── realized_pnl_ton           — closed trade P&L
-│   ├── unrealized_pnl_ton         — open position P&L
-│   ├── peak_value_ton             — all-time high value
-│   └── max_drawdown_percent       — max drawdown from peak
-│
-├── open_positions[]               — currently held tokens
-│   ├── id, symbol, dex
-│   ├── entry_price_ton, cost_ton
-│   ├── current_value_ton          — live mark-to-market
-│   ├── entry_signals[]            — signals that triggered entry
-│   └── entry_decision             — full AI decision object
-│
-├── closed_trades[]                — trade history
-│   ├── id, symbol, dex
-│   ├── entry_price_ton, exit_price_ton
-│   ├── cost_ton, proceeds_ton, pnl_ton, pnl_percent
-│   ├── hold_minutes, exit_reason
-│   └── entry_decision             — AI decision with confidence/scores/reasoning
-│
-├── ai_decisions[]                 — every scanner evaluation
-│   ├── ts, symbol
-│   ├── decision.action            — BUY | SELL | HOLD
-│   ├── decision.confidence        — 0.0 – 1.0
-│   ├── decision.momentum_score    — 0 – 100
-│   ├── decision.rug_risk_score    — 0 – 100
-│   ├── decision.reasoning         — full AI text
-│   └── context.{price_ton, liquidity_ton, metrics}
-│
-├── missed_candidates[]            — rejected entries with post-hoc outcomes
-│   ├── symbol, pool_id
-│   ├── primary_reason             — rejection reason text
-│   ├── max_move_pct               — how much it moved after rejection
-│   └── rejection_correct          — true if rejection was the right call
-│
-├── blocked_exits[]                — premature exit attempts blocked by min hold
-│   ├── ts, symbol, position_id
-│   ├── age_minutes, min_hold_minutes
-│   ├── exit_confidence, rug_risk_score
-│   └── ai_reasoning               — AI text explaining the exit intent
-│
-└── protection
-    ├── mode                       — NORMAL | CAPITAL_PROTECTION
-    ├── cp_active, cp_since, cp_triggers[]
-    ├── daily_stop, daily_stop_reason
-    └── cooldown_until, cooldown_reason
+├── portfolio.{starting_capital_ton, cash_ton, total_value_ton,
+│             realized_pnl_ton, unrealized_pnl_ton, peak_value_ton,
+│             max_drawdown_percent}
+├── open_positions[].{id, symbol, dex, entry_price_ton, cost_ton,
+│                    current_value_ton, entry_signals[], entry_decision}
+├── closed_trades[].{id, symbol, dex, entry_price_ton, exit_price_ton,
+│                   cost_ton, proceeds_ton, pnl_ton, pnl_percent,
+│                   hold_minutes, exit_reason, entry_decision}
+├── ai_decisions[].{ts, symbol, decision.{action, confidence, momentum_score,
+│                  rug_risk_score, reasoning, source}, context.{price_ton,
+│                  liquidity_ton}}
+├── missed_candidates[].{symbol, pool_id, primary_reason, max_move_pct,
+│                       rejection_correct, reject_count}
+├── blocked_exits[].{ts, symbol, position_id, age_minutes, min_hold_minutes,
+│                   exit_confidence, rug_risk_score, ai_reasoning}
+└── protection.{mode, cp_active, cp_since, cp_triggers[], daily_stop,
+                daily_stop_reason, cooldown_until, cooldown_reason}
 ```
 
-To connect a different data source: implement `readFullDashboard()` in `lib/adapter.ts` returning `FullDashboard`.
+To replace the data source: implement `readFullDashboard()` in `lib/adapter.ts`
+returning `FullDashboard`. The `checkDataSource()` export feeds the health endpoint.
+
+---
+
+## Nginx reverse proxy (domain-ready)
+
+> **Note:** Do NOT point `realcapital.no` DNS to this server yet.
+> Test locally first. Add SSL via certbot before going public.
+
+When ready, create `/etc/nginx/sites-available/realcapital.no`:
+
+```nginx
+server {
+    listen 80;
+    server_name realcapital.no www.realcapital.no;
+
+    # Redirect HTTP → HTTPS once SSL is configured
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name realcapital.no www.realcapital.no;
+
+    ssl_certificate     /etc/letsencrypt/live/realcapital.no/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/realcapital.no/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         HIGH:!aNULL:!MD5;
+
+    # Proxy to Next.js
+    location / {
+        proxy_pass         http://127.0.0.1:4012;
+        proxy_http_version 1.1;
+        proxy_set_header   Upgrade $http_upgrade;
+        proxy_set_header   Connection 'upgrade';
+        proxy_set_header   Host $host;
+        proxy_set_header   X-Real-IP $remote_addr;
+        proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+        proxy_cache_bypass $http_upgrade;
+        proxy_read_timeout 60s;
+    }
+}
+```
+
+Enable and test:
+```bash
+sudo ln -s /etc/nginx/sites-available/realcapital.no /etc/nginx/sites-enabled/
+sudo nginx -t
+sudo systemctl reload nginx
+
+# Get SSL certificate (after DNS is pointed to this server)
+sudo certbot --nginx -d realcapital.no -d www.realcapital.no
+```
+
+Set `NEXT_PUBLIC_APP_URL=https://realcapital.no` in `.env.local` before deploying.
+
+---
+
+## Rotating admin credentials
+
+```bash
+# 1. Generate new password hash
+node -e "const c=require('crypto'); console.log(c.createHash('sha256').update('YOUR_NEW_PASSWORD').digest('hex'))"
+
+# 2. Update .env.local
+nano /home/ubuntu/real-capital/.env.local
+# Replace ADMIN_PASSWORD_HASH with the new hash
+
+# 3. Rebuild and restart
+npm run build
+pm2 restart real-capital
+```
 
 ---
 
 ## Deployment notes
 
-- Port `4012` (configurable in `package.json` scripts and `ecosystem.config.js`)
-- **Do not** connect `realcapital.no` DNS until the app is production-ready
-- `memory.json` must be readable by the process user
+- Port `4012` (set in `package.json` scripts and `ecosystem.config.js`)
+- `memory.json` must be readable by the process user (`ubuntu`)
 - `.env.local` is gitignored — never commit secrets
-- The app never writes to `memory.json` or modifies any trading logic
+- The app never writes to `memory.json` or touches any trading logic
+- Check health: `curl http://localhost:4012/api/health`
 
 ---
 
 ## Disclaimer
 
-Experimental AI trading system. Paper trading simulation only.
-Historical performance is not a guarantee of future results.
+Experimental AI trading system. Paper trading simulation only.  
+**Historical performance is not a guarantee of future results.**  
 Not financial advice.

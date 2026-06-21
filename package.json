@@ -1,13 +1,14 @@
 {
   "name": "real-capital",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "REAL Capital — AI trading intelligence dashboard for TON Momentum Hunter",
   "scripts": {
     "dev": "next dev -p 4012",
     "build": "next build",
     "start": "next start -p 4012",
-    "lint": "next lint"
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "iron-session": "^8.0.4",
