@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getIronSession } from "iron-session";
-import { readFullDashboard } from "@/lib/adapter";
+import { readFullDashboard, BridgeUnavailableError } from "@/lib/adapter";
 import { sessionOptions } from "@/lib/session";
 import type { SessionData } from "@/lib/session";
 
@@ -12,6 +12,13 @@ export async function GET(req: NextRequest) {
   const session = await getIronSession<SessionData>(req, res, sessionOptions);
   if (!session.isAdmin) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const data = await readFullDashboard();
-  return NextResponse.json(data);
+  try {
+    const data = await readFullDashboard();
+    return NextResponse.json(data);
+  } catch (err) {
+    if (err instanceof BridgeUnavailableError) {
+      return NextResponse.json({ error: "Bridge unavailable", detail: err.message }, { status: 503 });
+    }
+    return NextResponse.json({ error: "Internal error" }, { status: 500 });
+  }
 }

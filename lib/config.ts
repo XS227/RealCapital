@@ -55,8 +55,8 @@ export const config = {
     }
     return v;
   })(),
-  memoryJsonPath: process.env.MEMORY_JSON_PATH || "/home/ubuntu/ton-momentum-hunter/memory.json",
-  liveData: process.env.LIVE_DATA !== "0",
+  bridgeApiUrl: process.env.BRIDGE_API_URL || "",
+  bridgeApiKey: process.env.BRIDGE_API_KEY || "",
   appUrl: process.env.NEXT_PUBLIC_APP_URL || "http://localhost:4012",
   isProd,
 } as const;

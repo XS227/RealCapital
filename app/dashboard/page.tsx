@@ -14,7 +14,6 @@ interface PubStatus {
   };
   agentStatus: { running: boolean; paused: boolean; protectionMode: string };
   openPositionCount: number;
-  isMock: boolean;
   updatedAt: number;
 }
 
@@ -80,25 +79,18 @@ export default function DashboardPage() {
                     {s.agentStatus.paused ? "Paused" : "Running"}
                   </div>
                 )}
-                {s?.isMock && <span className="badge badge-gold">Mock Data</span>}
-                {s && !s.isMock && <span className="badge badge-green">Live Data</span>}
+                {s && <span className="badge badge-green">Live Data</span>}
               </div>
             </div>
           </div>
 
           {error && (
-            <div className="mock-banner">⚠ Could not reach agent — showing last known state</div>
+            <div className="mock-banner">⚠ Bridge unreachable — retrying every 10s</div>
           )}
 
           {isProtection && (
             <div className="status-bar protection" style={{ marginBottom: 24 }}>
-              🛡 Capital Protection Active — new entries paused ({prot})
-            </div>
-          )}
-
-          {s?.isMock && (
-            <div className="mock-banner">
-              ⚠ Mock data — connect MEMORY_JSON_PATH to enable live feed
+              Capital Protection Active — new entries paused ({prot})
             </div>
           )}
 

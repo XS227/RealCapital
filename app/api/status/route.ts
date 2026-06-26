@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { readFullDashboard } from "@/lib/adapter";
+import { readFullDashboard, BridgeUnavailableError } from "@/lib/adapter";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-const CACHE_MS = 4000;
+const CACHE_MS = 4_000;
 let cache: { at: number; data: unknown } | null = null;
 
 const RATE_MAP = new Map<string, { count: number; reset: number }>();
@@ -24,27 +24,31 @@ export async function GET(req: NextRequest) {
   const now = Date.now();
   if (cache && now - cache.at < CACHE_MS) return NextResponse.json(cache.data);
 
-  // Public endpoint: expose only portfolio summary + agent status (no trade details)
-  const full = await readFullDashboard();
-  const pub = {
-    portfolio: {
-      totalValueTon: full.portfolio.totalValueTon,
-      roiPercent: full.portfolio.roiPercent,
-      realizedPnlTon: full.portfolio.realizedPnlTon,
-      maxDrawdownPercent: full.portfolio.maxDrawdownPercent,
-      totalTrades: full.portfolio.totalTrades,
-      winRate: full.portfolio.winRate,
-    },
-    agentStatus: {
-      running: full.agentStatus.running,
-      paused: full.agentStatus.paused,
-      protectionMode: full.agentStatus.protection.mode,
-    },
-    openPositionCount: full.openPositions.length,
-    isMock: full.isMock,
-    updatedAt: full.updatedAt,
-  };
-
-  cache = { at: now, data: pub };
-  return NextResponse.json(pub);
+  try {
+    const full = await readFullDashboard();
+    const pub = {
+      portfolio: {
+        totalValueTon: full.portfolio.totalValueTon,
+        roiPercent: full.portfolio.roiPercent,
+        realizedPnlTon: full.portfolio.realizedPnlTon,
+        maxDrawdownPercent: full.portfolio.maxDrawdownPercent,
+        totalTrades: full.portfolio.totalTrades,
+        winRate: full.portfolio.winRate,
+      },
+      agentStatus: {
+        running: full.agentStatus.running,
+        paused: full.agentStatus.paused,
+        protectionMode: full.agentStatus.protection.mode,
+      },
+      openPositionCount: full.openPositions.length,
+      updatedAt: full.updatedAt,
+    };
+    cache = { at: now, data: pub };
+    return NextResponse.json(pub);
+  } catch (err) {
+    if (err instanceof BridgeUnavailableError) {
+      return NextResponse.json({ error: "Bridge unavailable" }, { status: 503 });
+    }
+    return NextResponse.json({ error: "Internal error" }, { status: 500 });
+  }
 }

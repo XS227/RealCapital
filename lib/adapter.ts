@@ -1,18 +1,18 @@
 /**
  * Read-only data adapter for the TON Momentum Hunter trading agent.
  *
- * Reads from memory.json only — never writes, never modifies trading logic.
- * All types mirror the agent's stored schema exactly.
+ * Fetches from the bridge API running on the VPS (bridge_server.py).
+ * Never writes to the agent. Never has write access to memory.json.
+ * The bridge exposes only GET endpoints protected by X-Api-Key.
  *
- * Connect real data: set MEMORY_JSON_PATH in .env.local.
- * If the file is missing or LIVE_DATA=0, falls back to mock data.
+ * Configure via .env.local:
+ *   BRIDGE_API_URL=http://<vps-ip>:9099
+ *   BRIDGE_API_KEY=<64-char hex key>
  */
 
-import { promises as fs } from "fs";
 import { config } from "./config";
 
-const MEMORY_PATH = config.memoryJsonPath;
-const LIVE        = config.liveData;
+const BRIDGE_TIMEOUT_MS = 8_000;
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -130,8 +130,36 @@ export interface FullDashboard {
   recentDecisions: AiDecision[];
   missedCandidates: MissedCandidate[];
   blockedExits: ProtectionEvent[];
-  isMock: boolean;
+  isMock: false;
   updatedAt: number;
+}
+
+// ── Bridge fetch ───────────────────────────────────────────────────────────────
+
+export class BridgeUnavailableError extends Error {
+  constructor(public readonly status?: number, message?: string) {
+    super(message ?? `Bridge unreachable${status ? ` (HTTP ${status})` : ""}`);
+    this.name = "BridgeUnavailableError";
+  }
+}
+
+async function fetchBridge(path: string): Promise<unknown> {
+  const { bridgeApiUrl, bridgeApiKey } = config;
+  if (!bridgeApiUrl) throw new BridgeUnavailableError(undefined, "BRIDGE_API_URL not configured");
+
+  let res: Response;
+  try {
+    res = await fetch(`${bridgeApiUrl}${path}`, {
+      headers: { "X-Api-Key": bridgeApiKey },
+      signal: AbortSignal.timeout(BRIDGE_TIMEOUT_MS),
+      cache: "no-store",
+    });
+  } catch (err) {
+    throw new BridgeUnavailableError(undefined, `Bridge fetch failed: ${err}`);
+  }
+
+  if (!res.ok) throw new BridgeUnavailableError(res.status);
+  return res.json();
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -320,162 +348,36 @@ function mapAgentStatus(s: any, nowMs: number): AgentStatus {
 
 // ── Public API ─────────────────────────────────────────────────────────────────
 
+/**
+ * Fetch the full dashboard payload from the bridge.
+ * Throws BridgeUnavailableError if the bridge is down or misconfigured.
+ */
 export async function readFullDashboard(): Promise<FullDashboard> {
   const nowMs = Date.now();
-  if (LIVE) {
-    try {
-      const raw = await fs.readFile(MEMORY_PATH, "utf-8");
-      const s   = JSON.parse(raw);
-      const trades = Array.isArray(s.closed_trades) ? s.closed_trades : [];
-      return {
-        portfolio:        mapPortfolio(s.portfolio || {}, trades),
-        agentStatus:      mapAgentStatus(s, nowMs),
-        openPositions:    mapOpenPositions(s.open_positions, nowMs),
-        closedTrades:     mapClosedTrades(trades),
-        recentDecisions:  mapDecisions(s.ai_decisions),
-        missedCandidates: mapMissed(s.missed_candidates),
-        blockedExits:     mapBlockedExits(s.blocked_exits),
-        isMock:    false,
-        updatedAt: nowMs,
-      };
-    } catch {
-      // file missing / parse error → fall through to mock
-    }
-  }
-  return makeMockDashboard(nowMs);
+  const s = await fetchBridge("/api/memory") as any;
+  const trades = Array.isArray(s.closed_trades) ? s.closed_trades : [];
+  return {
+    portfolio:        mapPortfolio(s.portfolio || {}, trades),
+    agentStatus:      mapAgentStatus(s, nowMs),
+    openPositions:    mapOpenPositions(s.open_positions, nowMs),
+    closedTrades:     mapClosedTrades(trades),
+    recentDecisions:  mapDecisions(s.ai_decisions),
+    missedCandidates: mapMissed(s.missed_candidates),
+    blockedExits:     mapBlockedExits(s.blocked_exits),
+    isMock:    false,
+    updatedAt: nowMs,
+  };
 }
 
-/** Check whether the data source is reachable (for health endpoint). */
+/**
+ * Returns true when the bridge is reachable and memory.json exists on the VPS.
+ * Used by the /api/health endpoint.
+ */
 export async function checkDataSource(): Promise<boolean> {
   try {
-    await fs.access(MEMORY_PATH);
-    return true;
+    const h = await fetchBridge("/api/health") as any;
+    return h?.memory_exists === true;
   } catch {
     return false;
   }
-}
-
-// ── Mock data ──────────────────────────────────────────────────────────────────
-
-function makeMockDashboard(nowMs: number): FullDashboard {
-  return {
-    portfolio: {
-      startingCapitalTon: 15,
-      cashTon: 13.4,
-      totalValueTon: 14.8,
-      realizedPnlTon: -0.22,
-      unrealizedPnlTon: 0.18,
-      peakValueTon: 16.2,
-      maxDrawdownPercent: 4.5,
-      roiPercent: -1.33,
-      winRate: 44.4,
-      totalTrades: 9,
-    },
-    agentStatus: {
-      running: true,
-      simulationMode: true,
-      paused: false,
-      pausedReason: null,
-      lastActivityAt: nowMs - 120_000,
-      protection: {
-        mode: "NORMAL",
-        cpActive: false,
-        cpSince: null,
-        cpTriggers: [],
-        dailyStop: false,
-        dailyStopReason: null,
-        cooldownUntil: null,
-        cooldownReason: null,
-      },
-    },
-    openPositions: [
-      {
-        id: "mock-001",
-        symbol: "JETTON",
-        dex: "stonfi",
-        entryPriceTon: 0.00421,
-        currentPriceTon: 0.00449,
-        costTon: 2.5,
-        currentValueTon: 2.66,
-        pnlTon: 0.16,
-        pnlPercent: 6.4,
-        ageMinutes: 18,
-        entrySignals: ["volume_spike", "buy_imbalance"],
-        confidence: 0.78,
-        reasoning: "Strong momentum with 4.2x volume spike and positive buy pressure.",
-        openedAt: (nowMs - 1_080_000) / 1000,
-      },
-    ],
-    closedTrades: [
-      {
-        id: "mock-t1",
-        symbol: "TON",
-        dex: "dedust",
-        entryPriceTon: 2.8,
-        exitPriceTon: 3.1,
-        costTon: 3.0,
-        proceedsTon: 3.32,
-        pnlTon: 0.32,
-        pnlPercent: 10.7,
-        holdMinutes: 42,
-        exitReason: "take_profit",
-        confidence: 0.81,
-        momentumScore: 82,
-        rugRiskScore: 18,
-        reasoning: "High momentum with sustained buy pressure.",
-        riskWarning: "Thin liquidity risk.",
-        openedAt: (nowMs - 3_600_000) / 1000,
-        closedAt: (nowMs - 1_080_000) / 1000,
-      },
-      {
-        id: "mock-t2",
-        symbol: "BOLT",
-        dex: "stonfi",
-        entryPriceTon: 0.0012,
-        exitPriceTon: 0.00108,
-        costTon: 2.0,
-        proceedsTon: 1.8,
-        pnlTon: -0.2,
-        pnlPercent: -10.0,
-        holdMinutes: 22,
-        exitReason: "stop_loss",
-        confidence: 0.72,
-        momentumScore: 68,
-        rugRiskScore: 32,
-        reasoning: "Early momentum signal reversed faster than expected.",
-        riskWarning: "High rug risk score — reduced size.",
-        openedAt: (nowMs - 7_200_000) / 1000,
-        closedAt: (nowMs - 5_880_000) / 1000,
-      },
-    ],
-    recentDecisions: [
-      {
-        ts: (nowMs - 90_000) / 1000,
-        symbol: "TSHIB",
-        action: "HOLD",
-        confidence: 0.61,
-        momentumScore: 55,
-        rugRiskScore: 42,
-        entryQualityScore: 48,
-        reasoning: "Confidence below threshold (0.61 < 0.70). Rug risk elevated.",
-        source: "ai",
-        priceTon: 0.000023,
-        liquidityTon: 4200,
-      },
-    ],
-    missedCandidates: [
-      {
-        symbol: "PIXL",
-        poolId: "stonfi:mock",
-        startedAt: (nowMs - 600_000) / 1000,
-        primaryReason: "confidence 0.65 < 0.70; volume spike 1.8x < 3.0x",
-        maxMovePct: 12.4,
-        rejectionCorrect: false,
-        rejectCount: 3,
-      },
-    ],
-    blockedExits: [],
-    isMock: true,
-    updatedAt: nowMs,
-  };
 }

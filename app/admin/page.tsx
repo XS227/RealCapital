@@ -22,8 +22,10 @@ export default function AdminOverview() {
       try {
         const r = await fetch("/api/admin/portfolio");
         if (r.status === 401) { window.location.href = "/admin/login"; return; }
+        if (r.status === 503) { setErr("Bridge unavailable — agent VPS unreachable"); return; }
         if (!r.ok) throw new Error();
         setData(await r.json());
+        setErr("");
       } catch { setErr("Failed to load data"); }
     }
     load();
@@ -45,8 +47,7 @@ export default function AdminOverview() {
             {d ? (
               <>
                 Updated {fmtAge(d.updatedAt)}{" "}
-                {d.isMock && <span className="badge badge-gold" style={{ marginLeft: 6 }}>Mock</span>}
-                {!d.isMock && <span className="badge badge-green" style={{ marginLeft: 6 }}>Live</span>}
+                <span className="badge badge-green" style={{ marginLeft: 6 }}>Live</span>
               </>
             ) : "Loading…"}
           </p>
